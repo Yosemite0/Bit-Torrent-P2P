@@ -1,18 +1,23 @@
+// Standard Libraries
 #include <iostream>
 #include <unordered_map>
-#include <map>
-#include <set>
 #include <unordered_set>
 #include <vector>
+#include <string>
+#include <sstream>
+#include <cstring>
+
+// Threading and Synchronization
 #include <thread>
 #include <mutex>
-#include <string>
+
+// Networking
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <signal.h>
-#include <cstring>
-#include <sstream>
+
+// File Handling
 #include <fcntl.h>
 #include <errno.h>
 
@@ -831,7 +836,7 @@ void sync(){
     // if log_line == 0 execute every log 
     // else execute logs with opposite tracker 0 to 1 and 1 to 0
 
-    int log_fd = open(log_file.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
+    int log_fd = open(other_log_file.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
     if (log_fd == -1) {
         cerr << "Failed to open log file\n";
         return;
