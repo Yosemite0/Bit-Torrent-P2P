@@ -675,7 +675,12 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
     string ip_port = argv[1];
-    client_port = stoi(ip_port.substr(ip_port.find_last_of(':')));
+    size_t colon_pos = ip_port.find(':');
+    if (colon_pos == std::string::npos) {
+        cerr << "Invalid IP:Port format" << endl;
+        return EXIT_FAILURE;
+    }
+    client_port = stoi(ip_port.substr(colon_pos + 1));
     int tracker_number = stoi(argv[2]);
 
     FILE *info_file = fopen("info.txt", "r");

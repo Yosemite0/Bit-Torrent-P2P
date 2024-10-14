@@ -59,7 +59,9 @@ struct File_info {
 };;
 
 unordered_map <string,File_info> files;
+// socket -> user_id
 unordered_map <int, string> session;
+// user_id -> (socket, port)
 unordered_map <string, pair<int,int>> logged_in;
 unordered_map <string, User> users;
 unordered_map <string, Group> groups;
@@ -571,6 +573,21 @@ void update_chunk(int client_socket, const string &command){
     send_response(client_socket, "Socket updated " + file_name + " " + to_string(chunk_num) + "\n");
 }
 
+// filename chunk_no.
+void add_chunk(int client_socket, string &command) {
+    vector<string> token = parse_command(command);
+    string file_name = token[1];
+    int chunk_no = stoi(token[2]);
+    lock_guard<mutex> lock(tracker_mutex);
+    string user_id = session[client_socket];
+    auto file_it = files.find(file_name);
+    if (file_it == files.end()) {
+        return;
+    }
+    File_info &file = file_it->second;
+    file.chunks[chunk_no].sockets.insert(logged_in[user_id].second);
+}
+
 void handle_client(int client_socket)
 {
     char buffer[1024 * 8];
@@ -639,6 +656,13 @@ void handle_client(int client_socket)
         else if(command.find("update_chunk") == 0)
         {
             update_chunk(client_socket, command);
+        }
+        else if (command.find("add_chunk") == 0){
+            add_chunk(client_socket,command);
+        }
+        else if(command.find("stop_share") == 0)
+        {
+            // stop_share(client_socket, command);
         }
         else
         {
