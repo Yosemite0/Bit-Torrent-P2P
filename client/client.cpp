@@ -28,7 +28,7 @@ int CHUNK_SIZE = 512 * 1024;
 
 struct File_info {
     string file_name;
-    // string file_hash;
+    string file_hash;
     int file_size;
     unordered_map<int,pair<int,string>> chunks_hash;
 };
@@ -40,6 +40,9 @@ struct download_file_info {
     unordered_map<int, string> chunks_hash;
 };
 
+vector<string> file_chache;
+
+vector<download_file_info> download_files;
 struct Chunk {
     int chunk_num;
     int size;
@@ -54,13 +57,15 @@ struct File_info_tracker {
     unordered_map<int, Chunk> chunks;
 };;
 
+void handleCommand(string command);
+
 void sigHandler(int sigNum) {
     cout << "SigInt received. Closing sockets..." << endl;
+    handleCommand("logout");
     close(tracker_sock);
     close(client_sock);
     exit(EXIT_SUCCESS);
 }
-
 
 vector<string> split(const string &str, char delim = ' ')
 {
@@ -95,8 +100,9 @@ string send_command(int sock, const string &command) {
     return string(buffer);
 }
 
-void write_chunks_to_files(const string &file_name, int chunk_size = CHUNK_SIZE) {
+void write_chunks_to_files(const string &file_path, int chunk_size = CHUNK_SIZE) {
     string client_folder = "./" + to_string(client_port);
+    string file_name = file_path.substr(file_path.find_last_of("/\\") + 1);
     string chunk_folder = client_folder + "/0_" + file_name;
 
     struct stat st;
@@ -104,7 +110,7 @@ void write_chunks_to_files(const string &file_name, int chunk_size = CHUNK_SIZE)
         mkdir(chunk_folder.c_str(), 0700);
     }
 
-    FILE *file = fopen((client_folder + "/" + file_name).c_str(), "rb");
+    FILE *file = fopen(file_path.c_str(), "rb");
     if (file == NULL) {
         cerr << "Failed to open file: " << strerror(errno) << endl;
         exit(EXIT_FAILURE);
@@ -170,11 +176,13 @@ File_info create_file_info(const string &file_name, int chunk_size = CHUNK_SIZE)
 
     // Calculate total file size
     info.file_size = 0;
+    string totalhash = "";
     for (const auto &chunk : info.chunks_hash) {
         info.file_size += chunk.second.first;
+        totalhash += chunk.second.second;
     }
-
-
+    info.file_hash = sha1_hash(totalhash);
+    file_chache.push_back(file_name);
     return info;
 }
 
@@ -183,6 +191,8 @@ string upload_file_info(const File_info &info, const string &group_id) {
     for (auto &chunk : info.chunks_hash) {
         file_info += " " + to_string(chunk.first) + " " +to_string(chunk.second.first) + " " + chunk.second.second;
     }
+    file_info = file_info + " " + info.file_hash;
+    // cerr << file_info; // Debug statement
     return send_command(tracker_sock, "upload_file " + file_info);
 }
 
@@ -219,9 +229,39 @@ File_info_tracker get_response_file_info(string &response){
     cout << "Received response from tracker" << endl;
     for(auto i : file_tracker.chunks){
         cout << i.first << " " << i.second.chunk_num << " " << i.second.size << " " << i.second.hash << endl;
+        cout << "Sockets: " << i.second.sockets.size() << endl;
+        for (auto j : i.second.sockets) {
+            cout << j << " ";
+        }
     }
     cout << "File Name: " << file_tracker.file_name << endl;
     return file_tracker;
+}
+
+vector<pair<int,vector<int>>> piece_selection_algorithm(const File_info_tracker &file_tracker){
+    vector<pair<int,vector<int>>> piece_order;
+    for(auto i : file_tracker.chunks){
+        vector<int> sockets = i.second.sockets;
+        pair<int,vector<int>> p;
+        p.first = i.first;
+        p.second = sockets;
+        piece_order.push_back(p);
+    }
+    sort(piece_order.begin(),piece_order.end(),[](pair<int,vector<int>> &a, pair<int,vector<int>> &b){
+        return a.second.size() < b.second.size();
+    });
+    unordered_map<int,int> socket_to_cost;
+    for(auto &i : piece_order){
+        sort(i.second.begin(),i.second.end(),[&socket_to_cost](int a, int b){
+            return socket_to_cost[a] < socket_to_cost[b];
+        });
+        int cost = 20;
+        for(auto j : i.second){
+            socket_to_cost[j]+=cost;
+            cost = max(1,cost/2);
+        }
+    }
+    return piece_order;
 }
 
 bool getChunk(int peer_fd, const string& file_name, int chunk_num, int chunk_size, const string& chunk_hash) {
@@ -276,32 +316,43 @@ bool getChunk(int peer_fd, const string& file_name, int chunk_num, int chunk_siz
     return true;
 }
 
-void downloadChunk(const File_info_tracker& file_tracker, int chunk_num, int peer_socket, std::mutex& mtx, download_file_info& downloads) {
+bool downloadChunk(const File_info_tracker& file_tracker, int chunk_num, vector<int> sockets,mutex& mtx, download_file_info& downloads) {
     const Chunk& chunk = file_tracker.chunks.at(chunk_num);
     
     bool success = false;
-    int retry_count = 0;
 
-    // Try to download the chunk up to 3 times
-    // while (!success && retry_count < 3) {
-        // cout << "Attempt " << (retry_count + 1) << " to download chunk " << chunk_num << "." << endl; // Debug statement
+    for(auto i : sockets){
+        int peer_socket = socket(AF_INET, SOCK_STREAM, 0);
+        if (peer_socket < 0) {
+            cerr << "Failed to create peer socket: " << strerror(errno) << endl;
+            return false;
+        }
+
+        sockaddr_in peer_addr;
+        peer_addr.sin_family = AF_INET;
+        peer_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        peer_addr.sin_port = htons(i);
+        int peer_fd = connect(peer_socket, (struct sockaddr*)&peer_addr, sizeof(peer_addr));
         success = getChunk(peer_socket, file_tracker.file_name, chunk_num, chunk.size, chunk.hash);
-        retry_count++;
-    // }
-
+        close(peer_socket);
+        if(success){
+            break;
+        }
+    }
     // Lock the mutex to safely update shared resources
-    std::lock_guard<std::mutex> lock(mtx);
+   lock_guard<std::mutex> lock(mtx);
     if (success) {
         downloads.chunks_hash[chunk_num] = chunk.hash;
+        send_command(tracker_sock, "add_chunk " + file_tracker.file_name + " " + to_string(chunk_num));
         // cout << "Successfully downloaded chunk " << chunk_num << "." << endl; // Debug statement
+        return true;
     } else {
         downloads.status = "Error";
-        // cerr << "Failed to download chunk " << chunk_num << " after 3 attempts." << endl;
+        return false;
     }
 }
 
 bool mergeChunks(const string& file_name, int total_chunks , string dest_file_path) {
-    // Create the final output file
     string output_file_name = dest_file_path;
     FILE *output_file = fopen(output_file_name.c_str(), "wb");
     if (output_file == NULL) {
@@ -319,8 +370,7 @@ bool mergeChunks(const string& file_name, int total_chunks , string dest_file_pa
             return false;
         }
         
-        // Read chunk data and write it to the output file
-        char buffer[1024]; // Buffer to hold data temporarily
+        char buffer[1024];
         size_t bytes_read;
         while ((bytes_read = fread(buffer, 1, sizeof(buffer), chunk_file)) > 0) {
             fwrite(buffer, 1, bytes_read, output_file);
@@ -330,61 +380,43 @@ bool mergeChunks(const string& file_name, int total_chunks , string dest_file_pa
     }
     
     fclose(output_file);
-    // cout << "All chunks merged into: " << output_file_name << endl;
     return true;
 }
 
-void download(File_info_tracker &file_tracker,string dest_file_path) {
+void download(File_info_tracker &file_tracker,string dest_file_path, download_file_info& downloads) {
     string client_folder = "./" + to_string(client_port);
     string file_folder = client_folder + "/0_" + file_tracker.file_name;
 
-    // Create directory for downloading chunks
     struct stat st;
     if (stat(file_folder.c_str(), &st) == -1) {
         mkdir(file_folder.c_str(), 0700);
-        cout << "Created folder: " << file_folder << endl; // Debug statement
+        // cout << "Created folder: " << file_folder << endl;
     }
 
-    // Initialize download status
-    download_file_info downloads;
     downloads.status = "Downloading";
     downloads.total_chunks = file_tracker.chunks.size();
-    downloads.file_name = file_tracker.file_name;
 
-    std::mutex mtx; // Mutex for thread-safe updates
-    std::vector<std::thread> threads; // Vector to hold threads
+   mutex mtx;
+   vector<std::thread> threads;
 
-    // Iterate through each chunk and download it
-    for (const auto &chunk_pair : file_tracker.chunks) {
-        int chunk_num = chunk_pair.first;
-        const Chunk& chunk = chunk_pair.second;
+    auto piece_order = piece_selection_algorithm(file_tracker);
 
-        // Create a peer socket for each chunk
-        int peer_fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (peer_fd < 0) {
-            cerr << "Failed to create peer socket" << endl;
-            exit(EXIT_FAILURE);
-        }
 
-        sockaddr_in peer_addr;
-        peer_addr.sin_family = AF_INET;
-        peer_addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // Assuming localhost for now
-        peer_addr.sin_port = htons(chunk.sockets[0]); // Use first available socket
-
-        // Try to connect to the peer
-        if (connect(peer_fd, (struct sockaddr*)&peer_addr, sizeof(peer_addr)) < 0) {
-            cerr << "Failed to connect to peer: " << strerror(errno) << endl;
-            close(peer_fd);
-            continue; // Continue to the next chunk
-        }
-
-        // Download the chunk synchronously
-        downloadChunk(file_tracker, chunk_num, peer_fd, mtx, downloads);
-        close(peer_fd); // Close peer socket after downloading the chunk
+    for (auto &piece : piece_order) {
+        // Download the chunk asynchronously using threads
+        int chunk_num = piece.first;
+        auto socket_order = piece.second;
+        threads.emplace_back(downloadChunk,ref(file_tracker), chunk_num ,socket_order, ref(mtx),ref(downloads));
     }
 
-    // Check download status
-    if (downloads.status != "Error") {
+    for (auto &thread : threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+    // cerr << "All threads joined" << endl;
+
+    if (downloads.status.find("Error") == string::npos) {
         bool status = mergeChunks(file_tracker.file_name, downloads.total_chunks, dest_file_path);
         if(status)
         downloads.status = "Completed";
@@ -429,6 +461,43 @@ void give_chunk(int peer_sock, const string &file_name, int chunk_num) {
     }
 
     cout << "Sent chunk " << chunk_num << " of file " << file_name << " to peer." << endl;
+}
+
+void delete_file(string &file_name) {
+    string client_folder = "./" + to_string(client_port);
+    string file_folder = client_folder + "/0_" + file_name;
+
+    struct dirent *entry;
+    DIR *dp = opendir(file_folder.c_str());
+    if (dp == NULL) {
+        cerr << "Failed to open file folder: " << endl;
+        return;
+    }
+
+    while ((entry = readdir(dp))) {
+        if (entry->d_type == DT_REG) {
+            string chunk_file_name = file_folder + "/" + entry->d_name;
+            if (remove(chunk_file_name.c_str()) != 0) {
+                cerr << "Failed to delete chunk file: " << endl;
+                return;
+            }
+        }
+    }
+    closedir(dp);
+
+    if (rmdir(file_folder.c_str()) != 0) {
+        cerr << "Failed to delete file folder: " << endl;
+        return;
+    }
+}
+
+void clearCache(){
+    for(auto i : file_chache){
+        delete_file(i);
+    }
+    for(auto i : download_files){
+        delete_file(i.file_name);
+    }
 }
 
 void handleCommand(string command) {
@@ -493,21 +562,18 @@ void handleCommand(string command) {
         cout << "Response: " << response << endl;
 
     } else if (command == "list_groups") {
-        string group_id;
-        cout << "Enter group ID: ";
-        getline(cin, group_id);        
-
-        string response = send_command(tracker_sock, "list_groups " + group_id);        
+        string response = send_command(tracker_sock, "list_groups");        
         cout << "Response: " << response << endl;
 
     } else if(command == "upload_file"){
-        cout << "Enter file name: ";
-        string file_name; 
-        getline(cin, file_name);
+        cout << "Enter file path: ";
+        string file_path; 
+        getline(cin, file_path);
         cout << "Enter group ID: ";
         string group_id; 
         getline(cin, group_id);
-        write_chunks_to_files(file_name);
+        write_chunks_to_files(file_path);
+        string file_name = file_path.substr(file_path.find_last_of("/\\") + 1);
         File_info upload_file = create_file_info(file_name);
         string response = upload_file_info(upload_file, group_id);
         
@@ -546,16 +612,45 @@ void handleCommand(string command) {
 
 
         string response = send_command(tracker_sock, "download_file " + group_id + " " + file_name);
+        download_file_info down_file_info;
+        down_file_info.file_name = file_name;
         if(response.find("success") == 0){
             File_info_tracker file_tracker =  get_response_file_info(response);
             cout << "Downloading: " << file_tracker.file_name << endl;   
-            download(file_tracker, dest_file_path);
+            download(file_tracker, dest_file_path, down_file_info);
+            down_file_info.status = "Completed";
             cout << "Download completed" << endl;
         }
         else {
+            down_file_info.status = "Error retrival from tracker";
             cout << "Response: " << response << endl;
         }
-    } else {
+        download_files.push_back(down_file_info);
+    } 
+    else if(command == "stop_share")
+    {
+        string file_name;
+        cout << "Enter file name: ";
+        getline(cin, file_name);
+        string group_id;
+        cout << "Enter group ID: ";
+        getline(cin, group_id);
+        delete_file(file_name);
+        string response = send_command(tracker_sock, "stop_share " + file_name + " " + group_id);        
+        cout << "Response: " << response << endl;
+    }
+    else if(command == "show_downloads")
+    {
+        for(auto i : download_files){
+            cout << i.file_name << " " << i.status << endl;
+        }
+    }
+    else if(command == "logout") {
+        clearCache();
+        string response = send_command(tracker_sock, "logout");
+        cout << "Response: " << response << endl;
+    }
+    else {
         cout << "Unknown command." << endl;
     }
 }
@@ -581,7 +676,6 @@ void process_peer_request(int peer_sock) {
             close(peer_sock);
         }
     } else {
-        cerr << "Failed to receive data from peer: " << strerror(errno) << endl;
         close(peer_sock);
     }
 }
@@ -660,6 +754,7 @@ void start_client(const string &tracker_ip, int tracker_port, int client_port) {
         getline(cin, command);
 
         if (command == "quit") {
+            handleCommand("logout");
             break;
         }
         handleCommand(command);
@@ -676,7 +771,7 @@ int main(int argc, char *argv[]) {
     }
     string ip_port = argv[1];
     size_t colon_pos = ip_port.find(':');
-    if (colon_pos == std::string::npos) {
+    if (colon_pos ==string::npos) {
         cerr << "Invalid IP:Port format" << endl;
         return EXIT_FAILURE;
     }
