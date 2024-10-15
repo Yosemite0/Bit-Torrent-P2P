@@ -430,10 +430,10 @@ void download(File_info_tracker &file_tracker,string dest_file_path, download_fi
     }
     // cerr << "All threads joined" << endl;
 
-    if (downloads.status.find("Error") == string::npos) {
+    if (downloads.status.find("Error") != 0) {
         bool status = mergeChunks(file_tracker.file_name, downloads.total_chunks, dest_file_path);
         if(status)
-        downloads.status = "Completed";
+            downloads.status = "Completed";
         else {
             downloads.status = "Error while merging chuunks";
         }
@@ -764,7 +764,8 @@ void start_client(const string &tracker_ip, int tracker_port, int client_port) {
 
     string command;
     while (true) {
-        cout << "\nEnter command (create_user, login, create_group, join_group, leave_group, list_requests, accept_request, list_groups, quit): ";
+
+        cout << "\nEnter command (create_user, login, create_group, join_group, leave_group, list_requests, accept_request, list_groups, upload_file, upload_chunks, list_files, download_file, stop_share, show_downloads, logout, quit): ";
         getline(cin, command);
 
         if (command == "quit") {

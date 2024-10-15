@@ -694,7 +694,7 @@ void leave_group(int client_socket, string command, bool to_send = true, string 
         // Stop sharing files when leaving group
         for (const auto &file_name : group.files)
         {
-            stop_share(client_socket, "stop_share " + file_name + " " + group_id, false);
+            stop_share(client_socket, "stop_share " + file_name + " " + group_id,false,_user_id);
         }
         if(to_send) write_log(command, _user_id, track_no);
         if(to_send) send_response(client_socket, "Left group successfully\n");
@@ -718,7 +718,7 @@ void logout(int client_socket, string &command, bool to_send = true, string _use
     users[user_id].isActive = false;
     auto groups = users[user_id].groups;
     for(auto i : groups){
-        leave_group(client_socket,"leave_group " + i.first,false);
+        leave_group(client_socket,"leave_group " + i.first,false, _user_id);
         cerr << "Leaving group " << i.first << endl;
     }
     if(to_send)
@@ -820,7 +820,7 @@ void execute_log_line(string &command){
     execute_log(_command,_user_id);
 }
 
-string read_line(int fd){
+string read_line(int &fd){
     string line;
     char c;
     while(read(fd, &c, 1) > 0){
@@ -833,14 +833,12 @@ string read_line(int fd){
 }
 
 void sync(){
-    // if log_line == 0 execute every log 
-    // else execute logs with opposite tracker 0 to 1 and 1 to 0
-
-    int log_fd = open(other_log_file.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
+    int log_fd = open(other_log_file.c_str(), O_RDONLY);
     if (log_fd == -1) {
         cerr << "Failed to open log file\n";
         return;
     }
+    lseek(log_fd, 0, SEEK_SET);
     for(int i = 0; i < log_line; i++){
         string log_entry = read_line(log_fd);
     }
@@ -870,8 +868,6 @@ void sync(){
             }
         }
     }
-    string log_entry;
-    int line = 0;
 }
 
 void handle_client(int client_socket)
