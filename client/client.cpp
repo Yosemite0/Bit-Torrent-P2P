@@ -4,7 +4,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <sstream>
-#include <fstream>
 #include <mutex>
 #include <thread>
 #include <algorithm>
@@ -632,7 +631,7 @@ void handleCommand(string command) {
             File_info_tracker file_tracker =  get_response_file_info(response);
             cout << "Downloading: " << file_tracker.file_name << endl;   
             download(file_tracker, dest_file_path, down_file_info);
-            down_file_info.status = "Completed";
+            // down_file_info.status = "Completed";
             cout << "Download completed" << endl;
         }
         else {
