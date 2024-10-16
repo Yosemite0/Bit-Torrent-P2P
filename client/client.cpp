@@ -4,7 +4,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <sstream>
-#include <fstream>
 #include <mutex>
 #include <thread>
 #include <algorithm>
@@ -37,8 +36,27 @@ int tracker_sock;
 int client_sock;
 int tracker_port;
 int client_port;
+string client_ip;
 int CHUNK_SIZE = 512 * 1024;
 
+struct address{
+    string ip = "127.0.0.1";
+    int port;
+    bool operator==(const address &a) const {
+        return ip == a.ip && port == a.port;
+    }
+};
+namespace std
+{
+    template <>
+    struct hash<address>
+    {
+        size_t operator()(const address &a) const
+        {
+            return hash<string>()(a.ip + to_string(a.port));
+        }
+    };
+}
 
 struct File_info {
     string file_name;
@@ -61,7 +79,7 @@ struct Chunk {
     int chunk_num;
     int size;
     string hash;
-    vector<int> sockets;
+    vector<address> sockets;
 };
 
 struct File_info_tracker {
@@ -229,8 +247,9 @@ File_info_tracker deserialize_file_tracker(const string &response) {
         chunk.hash = tokens[idx++];        
         int num_sockets = stoi(tokens[idx++]);
         for (int j = 0; j < num_sockets; ++j) {
+            string ip = tokens[idx++];
             int socket = stoi(tokens[idx++]);
-            chunk.sockets.push_back(socket);
+            chunk.sockets.push_back(address({ip,socket}));
         }
         file.chunks[chunk_num] = chunk;
     }
@@ -245,28 +264,28 @@ File_info_tracker get_response_file_info(string &response){
         cout << i.first << " " << i.second.chunk_num << " " << i.second.size << " " << i.second.hash << endl;
         cout << "Sockets: " << i.second.sockets.size() << endl;
         for (auto j : i.second.sockets) {
-            cout << j << " ";
+            cout << j.ip << " " << j.port << " ";
         }
     }
     cout << "File Name: " << file_tracker.file_name << endl;
     return file_tracker;
 }
 
-vector<pair<int,vector<int>>> piece_selection_algorithm(const File_info_tracker &file_tracker){
-    vector<pair<int,vector<int>>> piece_order;
+vector<pair<int,vector<address>>> piece_selection_algorithm(const File_info_tracker &file_tracker){
+    vector<pair<int,vector<address>>> piece_order;
     for(auto i : file_tracker.chunks){
-        vector<int> sockets = i.second.sockets;
-        pair<int,vector<int>> p;
+        vector<address> sockets = i.second.sockets;
+        pair<int,vector<address>> p;
         p.first = i.first;
         p.second = sockets;
         piece_order.push_back(p);
     }
-    sort(piece_order.begin(),piece_order.end(),[](pair<int,vector<int>> &a, pair<int,vector<int>> &b){
+    sort(piece_order.begin(),piece_order.end(),[](pair<int,vector<address>> &a, pair<int,vector<address>> &b){
         return a.second.size() < b.second.size();
     });
-    unordered_map<int,int> socket_to_cost;
+    unordered_map<address,int> socket_to_cost;
     for(auto &i : piece_order){
-        sort(i.second.begin(),i.second.end(),[&socket_to_cost](int a, int b){
+        sort(i.second.begin(),i.second.end(),[&socket_to_cost](address a, address b){
             return socket_to_cost[a] < socket_to_cost[b];
         });
         int cost = 20;
@@ -330,7 +349,7 @@ bool getChunk(int peer_fd, const string& file_name, int chunk_num, int chunk_siz
     return true;
 }
 
-bool downloadChunk(const File_info_tracker& file_tracker, int chunk_num, vector<int> sockets,mutex& mtx, download_file_info& downloads) {
+bool downloadChunk(const File_info_tracker& file_tracker, int chunk_num, vector<address> sockets,mutex& mtx, download_file_info& downloads) {
     const Chunk& chunk = file_tracker.chunks.at(chunk_num);
     
     bool success = false;
@@ -344,8 +363,8 @@ bool downloadChunk(const File_info_tracker& file_tracker, int chunk_num, vector<
 
         sockaddr_in peer_addr;
         peer_addr.sin_family = AF_INET;
-        peer_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-        peer_addr.sin_port = htons(i);
+        peer_addr.sin_addr.s_addr = inet_addr(i.ip.c_str());
+        peer_addr.sin_port = htons(i.port);
         int peer_fd = connect(peer_socket, (struct sockaddr*)&peer_addr, sizeof(peer_addr));
         success = getChunk(peer_socket, file_tracker.file_name, chunk_num, chunk.size, chunk.hash);
         close(peer_socket);
@@ -790,6 +809,7 @@ int main(int argc, char *argv[]) {
         cerr << "Invalid IP:Port format" << endl;
         return EXIT_FAILURE;
     }
+    client_ip = ip_port.substr(0, colon_pos);
     client_port = stoi(ip_port.substr(colon_pos + 1));
     int tracker_number = stoi(argv[2]);
 
