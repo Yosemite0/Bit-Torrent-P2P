@@ -34,6 +34,36 @@ int track_no = -1;
 string log_file;
 string other_log_file;
 int log_line = 0;
+
+
+struct address{
+    string ip = "127.0.0.1";
+    int port;
+    bool operator==(const address &a) const {
+        return ip == a.ip && port == a.port;
+    }
+};
+namespace std
+{
+    template <>
+    struct hash<address>
+    {
+        size_t operator()(const address &a) const
+        {
+            return hash<string>()(a.ip + to_string(a.port));
+        }
+    };
+}
+string to_string(const address &a){
+    return a.ip + " " + to_string(a.port);
+}
+
+address to_address(string &a){
+    stringstream ss(a);
+    string ip; ss >> ip;
+    int port; ss >> port;
+    return address{ip,port};
+}
 struct User
 {
     string user_id;
@@ -42,7 +72,7 @@ struct User
     unordered_set<string> files;
     unordered_map<string, bool> group_owned;
     unordered_map<string, bool> groups;
-    int port;
+    address addr;
 };
 
 struct Group
@@ -58,7 +88,7 @@ struct Chunk {
     int chunk_num;
     int size;
     string hash;
-    unordered_set<int> sockets;
+    unordered_set<address> sockets;
 };
 
 struct File_info {
@@ -196,7 +226,7 @@ void login_user(int client_socket, string &command, bool to_send = true, string 
         if(to_send)
         logged_in[user_id] = {client_socket};
         users[user_id].isActive = true;
-        users[user_id].port = port;
+        users[user_id].addr.port = port;
         if(to_send)
         send_response(client_socket, "Login success\n");
         if(to_send)
@@ -409,15 +439,14 @@ void upload_file(int client_socket, string &command, bool to_send = true, string
     }
 
     string user_id = _user_id;
-    int port = users[user_id].port;
-
+    address addr = users[user_id].addr;
 
     File_info new_file;
     new_file.file_name = file_name;
     new_file.file_size = file_size;
     new_file.file_hash = tokens[tokens.size() - 1];
 
-    for (int i = 5; i < tokens.size() - 3; i += 3) {
+    for (int i = 5; i < tokens.size() - 4; i += 3) {
         int chunk_num = stoi(tokens[i]);
         int sz = stoi(tokens[i + 1]);
         string hash = tokens[i + 2];
@@ -426,7 +455,7 @@ void upload_file(int client_socket, string &command, bool to_send = true, string
         chunk.chunk_num = chunk_num;
         chunk.size = sz;
         chunk.hash = hash;
-        chunk.sockets.insert(port);
+        chunk.sockets.insert(addr);
 
         new_file.chunks[chunk_num] = chunk;
     }
@@ -446,7 +475,7 @@ void upload_file(int client_socket, string &command, bool to_send = true, string
         if (existing_file.file_hash == new_file.file_hash) {
             users[user_id].files.insert(file_name);
             for (auto &chunk : existing_file.chunks) {
-                chunk.second.sockets.insert(port);
+                chunk.second.sockets.insert(addr);
             }
             if(to_send)
             send_response(client_socket, "File already exists\n");
@@ -577,7 +606,7 @@ void update_chunk(int client_socket, string &command, bool to_send = true, strin
         return;
     }
     Chunk &chunk = chunk_it->second;
-    chunk.sockets.insert(users[user_id].port);
+    chunk.sockets.insert(users[user_id].addr);
     send_response(client_socket, "Socket updated " + file_name + " " + to_string(chunk_num) + "\n");
 }
 
@@ -593,7 +622,7 @@ void add_chunk(int client_socket, string &command, bool to_send = true, string _
         return;
     }
     File_info &file = file_it->second;
-    file.chunks[chunk_no].sockets.insert(users[user_id].port);
+    file.chunks[chunk_no].sockets.insert(users[user_id].addr);
     if(to_send)
     send_response(client_socket, "Chunk added\n");
     if(to_send)
@@ -629,7 +658,7 @@ void stop_share(int client_socket, string command, bool to_send = true, string _
     users[user_id].files.erase(file_name);
     bool to_remove = true;
     for(auto &chunk : file.chunks){
-        chunk.second.sockets.erase(users[user_id].port);
+        chunk.second.sockets.erase(users[user_id].addr);
         if(chunk.second.sockets.size() > 0){
             to_remove = false;
         }
