@@ -193,7 +193,7 @@ void create_user(int client_socket, string &command, bool to_send = true, string
 void login_user(int client_socket, string &command, bool to_send = true, string _user_id = "-")
 {
     vector<string> tokens = parse_command(command);
-    if (tokens.size() != 4)
+    if (tokens.size() != 5)
     {
         if(to_send)
         send_response(client_socket, "Invalid command format\n");
@@ -202,7 +202,8 @@ void login_user(int client_socket, string &command, bool to_send = true, string 
 
     string user_id = tokens[1];
     string hashed_passwd = tokens[2];
-    int port = stoi(tokens[3]);
+    string ip = tokens[3];
+    int port = stoi(tokens[4]);
 
     lock_guard<mutex> lock(tracker_mutex);
     if (_user_id != "-")
@@ -226,6 +227,7 @@ void login_user(int client_socket, string &command, bool to_send = true, string 
         if(to_send)
         logged_in[user_id] = {client_socket};
         users[user_id].isActive = true;
+        users[user_id].addr.ip = ip;
         users[user_id].addr.port = port;
         if(to_send)
         send_response(client_socket, "Login success\n");
@@ -408,7 +410,7 @@ void accept_request(int client_socket, string &command, bool to_send = true, str
         send_response(client_socket, "Request does not exist or user not found\n");
     }
 }
-
+string serialize_file_info(File_info &file);
 void upload_file(int client_socket, string &command, bool to_send = true, string _user_id = "-")
 {
     if(to_send)
@@ -446,7 +448,7 @@ void upload_file(int client_socket, string &command, bool to_send = true, string
     new_file.file_size = file_size;
     new_file.file_hash = tokens[tokens.size() - 1];
 
-    for (int i = 5; i < tokens.size() - 4; i += 3) {
+    for (int i = 5; i < tokens.size() - 3; i += 3) {
         int chunk_num = stoi(tokens[i]);
         int sz = stoi(tokens[i + 1]);
         string hash = tokens[i + 2];
@@ -459,6 +461,9 @@ void upload_file(int client_socket, string &command, bool to_send = true, string
 
         new_file.chunks[chunk_num] = chunk;
     }
+
+    cout << "Serializing file info\n" << serialize_file_info(new_file) << endl;
+
 
     lock_guard<mutex> lock(tracker_mutex);
     auto it = groups.find(group_id);
@@ -568,6 +573,7 @@ void download_file(int client_socket, string &command, bool to_send = true, stri
     File_info file = file_it->second;
 
     string serialized = "success " + serialize_file_info(file);
+    cerr << "Serialized :: " << serialized << endl ;
     send(client_socket, serialized.c_str(), serialized.size(), 0); 
     
 }

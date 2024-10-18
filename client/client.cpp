@@ -121,7 +121,7 @@ string sha1_hash(const string &input) {
         snprintf(buf, sizeof(buf), "%02x", hash[i]);
         hashed += buf;
     }
-    return hashed.substr(24);
+    return hashed;
 }
 
 string send_command(int sock, const string &command) {
@@ -366,6 +366,10 @@ bool downloadChunk(const File_info_tracker& file_tracker, int chunk_num, vector<
         peer_addr.sin_addr.s_addr = inet_addr(i.ip.c_str());
         peer_addr.sin_port = htons(i.port);
         int peer_fd = connect(peer_socket, (struct sockaddr*)&peer_addr, sizeof(peer_addr));
+        if(peer_fd < 0){
+            cerr << "Failed to connect to peer: " << strerror(errno) << endl;
+            continue;
+        }
         success = getChunk(peer_socket, file_tracker.file_name, chunk_num, chunk.size, chunk.hash);
         close(peer_socket);
         if(success){
@@ -552,7 +556,7 @@ void handleCommand(string command) {
         getline(cin, password);
         string hashed_credentials = sha1_hash(username + password);
 
-        string response = send_command(tracker_sock, "login " + username + " " + hashed_credentials + " " + to_string(client_port));
+        string response = send_command(tracker_sock, "login " + username + " " + hashed_credentials + " " + client_ip + " " + to_string(client_port));
         cout << "Response: " << response << endl;
     } else if (command == "create_group") {
         string group_id;
