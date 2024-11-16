@@ -871,7 +871,7 @@ string read_line(int &fd){
 void sync(){
     int log_fd = open(other_log_file.c_str(), O_RDONLY);
     if (log_fd == -1) {
-        cerr << "Failed to open log file\n";
+        // cerr << "Failed to open log file\n";
         return;
     }
     lseek(log_fd, 0, SEEK_SET);
@@ -918,6 +918,7 @@ void handle_client(int client_socket)
             lock_guard<mutex> lock(tracker_mutex);
             if (session.find(client_socket) != session.end())
             {
+                cerr << "User " << session[client_socket] << " disconnected\n";
                 string user_id = session[client_socket];
                 session.erase(client_socket);
                 logged_in.erase(user_id);

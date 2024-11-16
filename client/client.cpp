@@ -124,11 +124,23 @@ string sha1_hash(const string &input) {
     return hashed;
 }
 
+bool switchToNextTracker(const vector<pair<string, int>> &trackers);
+
 string send_command(int sock, const string &command) {
     send(sock, command.c_str(), command.size(), 0);
     char buffer[16*1024];
     memset(buffer, 0, sizeof(buffer));
     int bytes_read = read(sock, buffer, sizeof(buffer));
+    if (bytes_read <= 0) {
+        cout << "Tracker is offline. Attempting to switch to another tracker..." << endl;
+        if (!switchToNextTracker(trackers)) {
+            cerr << "No available trackers online. Exiting." << endl;
+            exit(EXIT_FAILURE);
+        }
+        // Retry the command with the new tracker
+        send(sock, command.c_str(), command.size(), 0);
+        bytes_read = read(sock, buffer, sizeof(buffer));
+    }
     return string(buffer);
 }
 
@@ -787,14 +799,8 @@ bool isTrackerOnline(const string& ip, int port) {
     tracker_addr.sin_addr.s_addr = inet_addr(ip.c_str());
     tracker_addr.sin_port = htons(port);
 
-    // Set timeout for the connection attempt
-    struct timeval timeout;
-    timeout.tv_sec = 2; // 2 seconds timeout
-    timeout.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
     int result = connect(sock, (struct sockaddr*)&tracker_addr, sizeof(tracker_addr));
+    // send_command(sock, "ping");
     close(sock);
     return (result == 0);
 }
@@ -803,7 +809,7 @@ int current_tracker_index = 0;
 
 bool switchToNextTracker(const vector<pair<string, int>> &trackers) {
     int total_trackers = trackers.size();
-    for(int i = 1; i <= total_trackers; ++i){
+    for(int i = 0; i < total_trackers; ++i){
         int next_tracker = (current_tracker_index + i) % total_trackers;
         if(isTrackerOnline(trackers[next_tracker].first, trackers[next_tracker].second)){
             close(tracker_sock);
@@ -840,13 +846,6 @@ void start_client(const vector<pair<string, int>> &trackers, int client_port) {
     while (true) {
         cout << "\nEnter command (create_user, login, create_group, join_group, leave_group, list_requests, accept_request, list_groups, upload_file, upload_chunks, list_files, download_file, stop_share, show_downloads, logout, quit): ";
         getline(cin, command);
-        if (!isTrackerOnline(trackers[current_tracker_index].first, trackers[current_tracker_index].second)) {
-            cout << "Current tracker is offline. Attempting to switch to another tracker..." << endl;
-            if (!switchToNextTracker(trackers)) {
-                cout << "No available trackers online. Exiting." << endl;
-                break;
-            }
-        }
         if (command == "quit") {
             handleCommand("logout");
             break;
