@@ -699,6 +699,7 @@ void leave_group(int client_socket, string command, bool to_send = true, string 
 
     lock_guard<mutex> lock(tracker_mutex);
     auto it = groups.find(group_id);
+    string response;
     if (it != groups.end())
     {
         Group &group = it->second;
@@ -711,7 +712,7 @@ void leave_group(int client_socket, string command, bool to_send = true, string 
                     if (member.first != user_id)
                     {
                         group.owner_id = member.first;
-                        if(to_send) send_response(client_socket, "You left the group. New owner is " + member.first + "\n");
+                        response = "New owner: " + member.first + "\n";
                         break;
                     }
                 }
@@ -719,7 +720,7 @@ void leave_group(int client_socket, string command, bool to_send = true, string 
             else
             {
                 groups.erase(group_id);
-                if(to_send) send_response(client_socket, "Group was removed since no members remain\n");
+                response = "Group deleted\n";
                 return;
             }
         }
@@ -732,7 +733,7 @@ void leave_group(int client_socket, string command, bool to_send = true, string 
             stop_share(client_socket, "stop_share " + file_name + " " + group_id,false,_user_id);
         }
         if(to_send) write_log(command, _user_id, track_no);
-        if(to_send) send_response(client_socket, "Left group successfully\n");
+        if(to_send) send_response(client_socket, response + "Left group successfully\n");
     }
     else
     {

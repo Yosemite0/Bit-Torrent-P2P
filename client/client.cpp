@@ -31,7 +31,7 @@
 
 using namespace std;
 
-
+vector<pair<string, int>> trackers;
 int tracker_sock;
 int client_sock;
 int tracker_port;
@@ -756,12 +756,11 @@ void open_client_port(int port) {
     listen(client_sock, SOMAXCONN); 
     cout << "Opened client port: " << port << endl;
 }
-
 void connect_to_tracker(const string &ip, int port) {
     tracker_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (tracker_sock < 0) {
         cerr << "Failed to create tracker socket" << endl;
-        exit(EXIT_FAILURE);
+        return;
     }
 
     sockaddr_in tracker_addr;
@@ -770,27 +769,84 @@ void connect_to_tracker(const string &ip, int port) {
     tracker_addr.sin_port = htons(port);
 
     if (connect(tracker_sock, (struct sockaddr*)&tracker_addr, sizeof(tracker_addr)) < 0) {
-        cerr << "Connection to tracker failed: " << strerror(errno) << endl;
+        cerr << "Connection to tracker at " << ip << ":" << port << " failed: " << strerror(errno) << endl;
         close(tracker_sock);
+        tracker_sock = -1;
+    } else {
+        cout << "Connected to tracker at " << ip << ":" << port << endl;
+    }
+}
+bool isTrackerOnline(const string& ip, int port) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        return false;
+    }
+
+    sockaddr_in tracker_addr;
+    tracker_addr.sin_family = AF_INET;
+    tracker_addr.sin_addr.s_addr = inet_addr(ip.c_str());
+    tracker_addr.sin_port = htons(port);
+
+    // Set timeout for the connection attempt
+    struct timeval timeout;
+    timeout.tv_sec = 2; // 2 seconds timeout
+    timeout.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+    int result = connect(sock, (struct sockaddr*)&tracker_addr, sizeof(tracker_addr));
+    close(sock);
+    return (result == 0);
+}
+
+int current_tracker_index = 0;
+
+bool switchToNextTracker(const vector<pair<string, int>> &trackers) {
+    int total_trackers = trackers.size();
+    for(int i = 1; i <= total_trackers; ++i){
+        int next_tracker = (current_tracker_index + i) % total_trackers;
+        if(isTrackerOnline(trackers[next_tracker].first, trackers[next_tracker].second)){
+            close(tracker_sock);
+            connect_to_tracker(trackers[next_tracker].first, trackers[next_tracker].second);
+            current_tracker_index = next_tracker;
+            cout << "Switched to tracker " << trackers[next_tracker].first << ":" << trackers[next_tracker].second << endl;
+            return true;
+        }
+    }
+    cerr << "No available trackers online." << endl;
+    return false;
+}
+void start_client(const vector<pair<string, int>> &trackers, int client_port) {
+    // Attempt to connect to available tracker
+    bool connected = false;
+    for (const auto &tracker : trackers) {
+        connect_to_tracker(tracker.first, tracker.second);
+        if (tracker_sock != -1) {
+            connected = true;
+            break;
+        }
+    }
+    if (!connected) {
+        cerr << "Failed to connect to any tracker." << endl;
         exit(EXIT_FAILURE);
     }
 
-    cout << "Connected to tracker at " << ip << ":" << port << endl;
-}
-
-void start_client(const string &tracker_ip, int tracker_port, int client_port) {
     open_client_port(client_port);
-    connect_to_tracker(tracker_ip, tracker_port);
     thread(handle_request, client_sock).detach();
 
     signal(SIGINT, sigHandler);
 
     string command;
     while (true) {
-
         cout << "\nEnter command (create_user, login, create_group, join_group, leave_group, list_requests, accept_request, list_groups, upload_file, upload_chunks, list_files, download_file, stop_share, show_downloads, logout, quit): ";
         getline(cin, command);
-
+        if (!isTrackerOnline(trackers[current_tracker_index].first, trackers[current_tracker_index].second)) {
+            cout << "Current tracker is offline. Attempting to switch to another tracker..." << endl;
+            if (!switchToNextTracker(trackers)) {
+                cout << "No available trackers online. Exiting." << endl;
+                break;
+            }
+        }
         if (command == "quit") {
             handleCommand("logout");
             break;
@@ -804,41 +860,42 @@ void start_client(const string &tracker_ip, int tracker_port, int client_port) {
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
-        cerr << "Usage: " << argv[0] << " <ip>:<client_port> <tracker_number>" << endl;
+        cerr << "Usage: " << argv[0] << " <ip>:<client_port> <tracker_info_file>" << endl;
         return EXIT_FAILURE;
     }
     string ip_port = argv[1];
     size_t colon_pos = ip_port.find(':');
-    if (colon_pos ==string::npos) {
+    if (colon_pos == string::npos) {
         cerr << "Invalid IP:Port format" << endl;
         return EXIT_FAILURE;
     }
     client_ip = ip_port.substr(0, colon_pos);
     client_port = stoi(ip_port.substr(colon_pos + 1));
-    int tracker_number = stoi(argv[2]);
 
-    FILE *info_file = fopen("info.txt", "r");
+    string info_filename = argv[2];
+    FILE *info_file = fopen(info_filename.c_str(), "r");
     if (info_file == NULL) {
-        cerr << "Failed to open info.txt" << endl;
+        cerr << "Failed to open " << info_filename << endl;
         return EXIT_FAILURE;
     }
 
     char line[256];
-    int current_tracker = 0;
-    string tracker_ip;
+
     while (fgets(line, sizeof(line), info_file)) {
-        if (current_tracker == tracker_number) {
-            istringstream iss(line);
-            iss >> tracker_ip >> tracker_port;
-            break;
+        string ip;
+        int port;
+        istringstream iss(line);
+        if (!(iss >> ip >> port)) {
+            cerr << "Invalid line in " << info_filename << ": " << line;
+            continue;
         }
-        current_tracker++;
+        trackers.emplace_back(ip, port);
     }
 
     fclose(info_file);
 
-    if (tracker_ip.empty() || tracker_port <= 0) {
-        cerr << "Invalid tracker number or details not found." << endl;
+    if (trackers.empty()) {
+        cerr << "No valid trackers found in " << info_filename << endl;
         return EXIT_FAILURE;
     }
 
@@ -848,7 +905,7 @@ int main(int argc, char *argv[]) {
         mkdir(client_folder.c_str(), 0700);
     }
 
-    start_client(tracker_ip, tracker_port, client_port);
+    start_client(trackers, client_port);
 
     return 0;
 }
